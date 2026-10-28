@@ -1,0 +1,826 @@
+<!doctype html>
+<html lang="en-GB">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>[hidden]{display:none!important}body{margin:0}</style>
+<title>Invoice Reader</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout: a working desk. Slim drop strip across the top, invoice cards on the left, sticky PDF preview on the right.
+   Accounting-paper cues: ledger rule under the title, double underline on every total. */
+:root{
+  --paper:#EBF0F2; --card:#FFFFFF; --field:#F4F7F8; --ink:#14222A; --muted:#55646D;
+  --line:#D3DCE0; --line-strong:#AEBBC2; --accent:#0A6B5B; --accent-soft:#DCEFEA; --on-accent:#FFFFFF;
+  --good:#17653A; --good-soft:#DDF1E4; --warn:#8A4B00; --warn-soft:#FBEBD0; --bad:#A3201A; --bad-soft:#F9DEDC;
+  --display:'Bricolage Grotesque','Segoe UI',system-ui,sans-serif;
+  --body:'IBM Plex Sans','Segoe UI',system-ui,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#0E181D; --card:#15232A; --field:#101C21; --ink:#E5EDF0; --muted:#91A3AC;
+  --line:#263A44; --line-strong:#3E5663; --accent:#55C8AF; --accent-soft:#123630; --on-accent:#08201B;
+  --good:#7BD9A4; --good-soft:#14341F; --warn:#F2B863; --warn-soft:#3A2D12; --bad:#FF9A92; --bad-soft:#3F1D1B; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --paper:#0E181D; --card:#15232A; --field:#101C21; --ink:#E5EDF0; --muted:#91A3AC;
+  --line:#263A44; --line-strong:#3E5663; --accent:#55C8AF; --accent-soft:#123630; --on-accent:#08201B;
+  --good:#7BD9A4; --good-soft:#14341F; --warn:#F2B863; --warn-soft:#3A2D12; --bad:#FF9A92; --bad-soft:#3F1D1B; color-scheme:dark}
+
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font-family:var(--body);font-size:14.5px;line-height:1.5;
+  padding-block:28px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+button,input,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+header.top{display:flex;flex-direction:column;gap:6px;padding-bottom:14px;border-bottom:3px double var(--line-strong)}
+h1{font-family:var(--display);font-weight:700;font-size:clamp(26px,4vw,34px);line-height:1.1;margin:0;letter-spacing:-.01em;text-wrap:balance}
+header.top p{margin:0;color:var(--muted);max-width:62ch}
+
+.drop{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;padding:16px 18px;border:1.5px dashed var(--line-strong);border-radius:12px;background:var(--card);transition:background .15s,border-color .15s}
+.drop.dragging{border-color:var(--accent);background:var(--accent-soft)}
+.drop strong{font-weight:600}
+.drop .hint{color:var(--muted);flex:1 1 220px;min-width:0}
+.btn{border:1px solid var(--line-strong);background:var(--card);border-radius:8px;padding:7px 13px;font-weight:500;line-height:1.2}
+.btn:hover{border-color:var(--ink)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.small{padding:4px 9px;font-size:12.5px}
+
+details.po{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:0}
+details.po summary{padding:11px 16px;cursor:pointer;font-weight:500;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+details.po summary .count{color:var(--muted);font-weight:400;font-size:13px}
+.po-body{padding:0 16px 16px;display:flex;flex-direction:column;gap:8px}
+.po-body p{margin:0;color:var(--muted);font-size:13px;max-width:70ch}
+textarea{width:100%;min-height:96px;resize:vertical;border:1px solid var(--line);border-radius:8px;background:var(--field);padding:9px 11px;font-family:var(--mono);font-size:13px}
+
+.banner{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:10px 14px;border-radius:10px;background:var(--accent-soft);color:var(--ink)}
+.banner span{flex:1 1 260px;min-width:0}
+.status{color:var(--muted);font-size:13px;min-height:1.4em}
+
+.work{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr);gap:20px;align-items:start}
+.list{display:flex;flex-direction:column;gap:12px;min-width:0}
+.list-head{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline;justify-content:space-between}
+.list-head h2,.pv-head h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:0}
+.summary{font-size:13px;color:var(--muted)}
+
+.inv{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:12px;min-width:0;cursor:default}
+.inv[aria-current="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.inv.is-done{opacity:.72}
+.inv-top{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between}
+.inv .sup{flex:1 1 200px;min-width:0;font-family:var(--display);font-weight:600;font-size:18px;border:1px solid transparent;border-radius:6px;background:transparent;padding:2px 6px;margin-left:-6px}
+.inv .sup:hover,.inv .sup:focus{border-color:var(--line);background:var(--field)}
+.done{display:flex;gap:7px;align-items:center;font-size:13px;color:var(--muted);white-space:nowrap}
+.done input{width:17px;height:17px;accent-color:var(--accent)}
+.fields{display:grid;gap:10px 12px}
+.fields.details{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+.fields.nums{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.fld{display:flex;flex-direction:column;gap:3px;min-width:0}
+.fld label{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.fld-in{display:flex;gap:6px;align-items:stretch;min-width:0}
+.fld input{flex:1 1 auto;min-width:0;width:100%;border:1px solid var(--line);border-radius:7px;background:var(--field);padding:6px 9px;font-family:var(--mono);font-size:14px;font-variant-numeric:tabular-nums}
+.fld.money input{text-align:right}
+.fld.total input{font-weight:600;border-bottom:4px double var(--ink)}
+.cp{flex:0 0 auto;border:1px solid var(--line-strong);background:var(--card);border-radius:7px;padding:0 9px;font-size:12px;font-weight:500;min-width:54px}
+.cp:hover{border-color:var(--ink)}
+.cp.ok{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:inline-flex;gap:6px;align-items:center;padding:2px 9px;border-radius:99px;font-size:12.5px;line-height:1.5;background:var(--field);color:var(--muted)}
+.chip::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:0 0 auto}
+.chip.good{background:var(--good-soft);color:var(--good)}
+.chip.warn{background:var(--warn-soft);color:var(--warn)}
+.chip.bad{background:var(--bad-soft);color:var(--bad)}
+.chip.info{background:var(--accent-soft);color:var(--accent)}
+.inv-foot{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;color:var(--muted);font-size:12.5px;border-top:1px solid var(--line);padding-top:9px}
+.inv-foot .fname{flex:1 1 140px;min-width:0;overflow-wrap:anywhere;font-family:var(--mono);font-size:12px}
+.link{background:none;border:0;padding:2px 4px;color:var(--accent);text-decoration:underline;text-underline-offset:3px;font-size:12.5px}
+.link.danger{color:var(--muted)}
+
+.empty{padding:26px 20px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--muted)}
+.empty strong{display:block;color:var(--ink);margin-bottom:4px;font-family:var(--display);font-size:17px}
+
+.preview{position:sticky;top:calc(env(safe-area-inset-top,0px) + 12px);background:var(--card);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;max-height:calc(100vh - 24px);min-width:0}
+.pv-head{padding:11px 14px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:2px;min-width:0}
+.pv-head .pv-name{font-family:var(--mono);font-size:12px;color:var(--ink);overflow-wrap:anywhere}
+.pages{overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--field);border-radius:0 0 12px 12px;min-height:200px}
+.pages canvas{width:100%;height:auto;background:#fff;border:1px solid var(--line);display:block}
+.pages .note{color:var(--muted);padding:10px}
+
+footer.fine{color:var(--muted);font-size:12.5px;max-width:80ch}
+
+@media (max-width:860px){
+  .work{grid-template-columns:minmax(0,1fr)}
+  .preview{position:static;max-height:none}
+  .pages{max-height:70vh}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+
+<div class="wrap">
+  <header class="top">
+    <h1>Invoice Reader</h1>
+    <p>Drop supplier invoices in. It reads the invoice number, date and totals so you can check them and copy each one into Sage. The PDFs are read in this browser and are not uploaded anywhere.</p>
+  </header>
+
+  <section class="drop" id="drop" aria-label="Add invoices">
+    <button type="button" class="btn primary" id="choose">Choose PDFs</button>
+    <input type="file" id="file" accept="application/pdf,.pdf" multiple hidden>
+    <span class="hint"><strong>Or drop invoice PDFs anywhere on this page.</strong> Several at once is fine. Each one becomes a card below.</span>
+  </section>
+
+  <details class="po" id="po-details">
+    <summary>Purchase orders to check against <span class="count" id="po-count">none added yet</span></summary>
+    <div class="po-body">
+      <p>Optional. Paste your open POs, one per line: PO number, supplier, total. Commas or tabs both work, and a header row is fine. The page compares the PO total with the invoice net and gross total.</p>
+      <label class="sr" for="po-list">Open purchase orders</label>
+      <textarea id="po-list" spellcheck="false" placeholder="1234, Supplier name, 120.00&#10;1235, Supplier name, 86.40"></textarea>
+    </div>
+  </details>
+
+  <div id="banner" class="banner" hidden>
+    <span>Showing the sample invoices you sent, so you can see how it reads them. Clear them before you start on real ones.</span>
+    <button type="button" class="btn small" id="clear-examples">Clear examples</button>
+  </div>
+  <div class="status" id="status" role="status" aria-live="polite"></div>
+
+  <div class="work">
+    <section class="list" aria-label="Invoices">
+      <div class="list-head">
+        <h2>Invoices</h2>
+        <span class="summary" id="summary"></span>
+      </div>
+      <div id="list" class="list"></div>
+    </section>
+
+    <aside class="preview" aria-label="Invoice preview">
+      <div class="pv-head"><h2>Preview</h2><span class="pv-name" id="pv-name">Select an invoice</span></div>
+      <div class="pages" id="pages"><div class="note">Click an invoice card to see the PDF here.</div></div>
+    </aside>
+  </div>
+
+  <footer class="fine">Only text-based PDFs are read. Scanned or photographed invoices need OCR, which this version does not do. Always compare the figures with the PDF before posting to Sage. Nothing here posts to Sage for you.</footer>
+</div>
+<div class="sr" id="live" aria-live="polite"></div>
+
+<script>
+(function () {
+'use strict';
+/* ---------- Invoice parsing (pure functions, no DOM) ---------- */
+
+/* Turn pdf.js text items into reading-order lines. */
+function itemsToLines(items) {
+  const rows = [];
+  items.forEach(function (it) {
+    if (!it.str || !it.str.trim()) return;
+    const x = it.transform[4], y = it.transform[5];
+    let row = rows.find(function (r) { return Math.abs(r.y - y) <= 5; });
+    if (!row) { row = { y: y, parts: [] }; rows.push(row); }
+    row.parts.push({ x: x, w: it.width || 0, s: it.str });
+  });
+  rows.sort(function (a, b) { return b.y - a.y; });
+  return rows.map(function (r) {
+    r.parts.sort(function (a, b) { return a.x - b.x; });
+    let out = '', prevEnd = null;
+    r.parts.forEach(function (p) {
+      if (prevEnd !== null && p.x - prevEnd > 1.2 && !/\s$/.test(out)) out += ' ';
+      out += p.s;
+      prevEnd = p.x + p.w;
+    });
+    return out.replace(/\s+/g, ' ').trim();
+  }).filter(Boolean);
+}
+
+const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+const DATE_SRC = '(\\b\\d{4}-\\d{2}-\\d{2}\\b|\\b\\d{1,2}[./-]\\d{1,2}[./-]\\d{2,4}\\b|\\b\\d{1,2}(?:st|nd|rd|th)?[\\s\\-\\/]+[A-Za-z]{3,9}\\.?,?[\\s\\-\\/]+\\d{2,4}\\b|\\b[A-Za-z]{3,9}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?,?\\s+\\d{4}\\b)';
+const NUM_SRC = '(-?\\d{1,3}(?:,\\d{3})*\\.\\d{2}|-?\\d+\\.\\d{2})';
+const CUR_SRC = '\\s*[:\\-]?\\s*(?:\\(\\s*(?:GBP|£)\\s*\\)|GBP|£)?\\s*:?\\s*£?\\s*';
+
+function normDate(s) {
+  if (!s) return '';
+  s = s.trim();
+  let d, m, y, mm;
+  if ((mm = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) {
+    y = +mm[1]; m = +mm[2]; d = +mm[3];
+  } else if ((mm = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/))) {
+    d = +mm[1]; m = +mm[2]; y = +mm[3];
+  } else if ((mm = s.match(/^(\d{1,2})(?:st|nd|rd|th)?[\s\-\/]+([A-Za-z]{3,9})\.?,?[\s\-\/]+(\d{2,4})$/))) {
+    d = +mm[1]; m = MONTHS[mm[2].slice(0, 3).toLowerCase()]; y = +mm[3];
+  } else if ((mm = s.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$/))) {
+    m = MONTHS[mm[1].slice(0, 3).toLowerCase()]; d = +mm[2]; y = +mm[3];
+  } else return '';
+  if (y < 100) y += 2000;
+  if (!m || m > 12 || !d || d > 31 || y < 2000 || y > 2100) return '';
+  if (new Date(Date.UTC(y, m - 1, d)).getUTCMonth() !== m - 1) return '';
+  return String(d).padStart(2, '0') + '/' + String(m).padStart(2, '0') + '/' + y;
+}
+
+function toDateObj(s) { const m = String(s || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/); return m ? new Date(Date.UTC(+m[3], +m[2] - 1, +m[1])) : null; }
+function fmtDateObj(d) { return String(d.getUTCDate()).padStart(2, '0') + '/' + String(d.getUTCMonth() + 1).padStart(2, '0') + '/' + d.getUTCFullYear(); }
+function addDays(d, n) { return new Date(d.getTime() + n * 86400000); }
+function endOfMonth(d) { return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)); }
+
+function datesInLine(line) {
+  const out = [], g = new RegExp(DATE_SRC, 'gi');
+  let m;
+  while ((m = g.exec(line))) { const n = normDate(m[1]); if (n) out.push(n); }
+  return out;
+}
+
+/* Column-heading layout: the label is a heading and the date sits on the next line. */
+function headingDates(lines, labelRe) {
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (!labelRe.test(lines[i])) continue;
+    const at = lines[i].search(labelRe);
+    if (datesInLine(lines[i].slice(at)).length) continue;
+    for (let k = i + 1; k <= i + 2 && k < lines.length; k++) {
+      const ds = datesInLine(lines[k]);
+      if (ds.length) return { head: lines[i], dates: ds };
+    }
+  }
+  return null;
+}
+
+function findDates(lines) {
+  const res = { date: '', due: '', dueNote: '' };
+  const dueSkip = function (line, m) { return /due\s*$/i.test(line.slice(0, m.index)); };
+  const first = function (list, skip) {
+    for (let i = 0; i < list.length; i++) {
+      const hits = allMatches(lines, list[i], skip);
+      for (let j = 0; j < hits.length; j++) { const n = normDate(hits[j]); if (n) return n; }
+    }
+    return '';
+  };
+
+  /* invoice date */
+  res.date = first([
+    new RegExp('\\b(?:invoice|inv\\.?|issue|document|doc\\.?)\\s*(?:date|dated)\\s*[:.]?\\s*' + DATE_SRC, 'i'),
+    new RegExp('\\bdate\\s*of\\s*(?:invoice|issue)\\s*[:.]?\\s*' + DATE_SRC, 'i'),
+    new RegExp('\\btax\\s*point(?:\\s*date)?\\s*[:.]?\\s*' + DATE_SRC, 'i'),
+    new RegExp('^number\\s*\\/\\s*date\\s*[:.]?\\s*[A-Z0-9\\-]+\\s*\\/\\s*' + DATE_SRC, 'i')
+  ], dueSkip);
+  const hi = headingDates(lines, /\binvoice\s*date\b/i);
+  if (!res.date && hi) {
+    if (/\bdue\s*date\b/i.test(hi.head)) {
+      if (hi.dates.length >= 2) res.date = hi.head.search(/invoice\s*date/i) < hi.head.search(/due\s*date/i) ? hi.dates[0] : hi.dates[hi.dates.length - 1];
+    } else res.date = hi.dates[0];
+  }
+  if (!res.date) res.date = first([new RegExp('\\bdate\\s*:\\s*' + DATE_SRC, 'i')], dueSkip);
+  if (!res.date) {
+    const bad = /due|payable|payment|terms|order|deliver|dispatch|despatch|loading|print/i;
+    const cand = lines.filter(function (l) { return !bad.test(l); });
+    const withWord = cand.filter(function (l) { return /\bdate\b/i.test(l); });
+    const pool = withWord.concat(cand);
+    for (let i = 0; i < pool.length && !res.date; i++) { const ds = datesInLine(pool[i]); if (ds.length) res.date = ds[0]; }
+  }
+
+  /* due date */
+  res.due = first([
+    new RegExp('\\b(?:payment\\s*)?due\\s*(?:date|by|on)?\\s*[:.]?\\s*' + DATE_SRC, 'i'),
+    new RegExp('\\bdate\\s*due\\s*[:.]?\\s*' + DATE_SRC, 'i'),
+    new RegExp('\\b(?:pay(?:ment)?\\s*by|payable\\s*by)\\s*[:.]?\\s*' + DATE_SRC, 'i')
+  ]);
+  if (!res.due) {
+    const hd = headingDates(lines, /\bdue\s*date\b/i);
+    if (hd) {
+      if (/\binvoice\s*date\b/i.test(hd.head)) {
+        if (hd.dates.length >= 2) res.due = hd.head.search(/invoice\s*date/i) < hd.head.search(/due\s*date/i) ? hd.dates[hd.dates.length - 1] : hd.dates[0];
+      } else res.due = hd.dates[hd.dates.length - 1];
+    }
+  }
+  if (!res.due && res.date) {
+    const text = lines.join('\n'), base = toDateObj(res.date);
+    let mm;
+    if (base && (mm = text.match(/(\d{1,3})\s*days?\s*(?:end\s*of\s*month|eom)/i))) {
+      res.due = fmtDateObj(addDays(endOfMonth(base), +mm[1])); res.dueNote = mm[1] + ' days after month end';
+    } else if (base && (mm = text.match(/\bnet\s*(\d{1,3})\s*days?|(\d{1,3})\s*days?\s*(?:net|nett|from\s*(?:date\s*of\s*)?invoice|date\s*of\s*invoice)|payment\s*terms?\s*[:\-]?\s*(\d{1,3})\s*days?/i))) {
+      const n = +(mm[1] || mm[2] || mm[3]);
+      res.due = fmtDateObj(addDays(base, n)); res.dueNote = n + ' days from the invoice date';
+    }
+  }
+  return res;
+}
+
+function num(s) { return Math.round(parseFloat(String(s).replace(/,/g, '')) * 100) / 100; }
+
+function allMatches(lines, re, skip) {
+  const out = [];
+  lines.forEach(function (line) {
+    const g = new RegExp(re.source, 'gi');
+    let m;
+    while ((m = g.exec(line))) {
+      if (skip && skip(line, m)) continue;
+      out.push(m[1]);
+      if (m[0].length === 0) g.lastIndex++;
+    }
+  });
+  return out;
+}
+
+const KNOWN_SUPPLIERS = [
+  { test: /univar/i, name: 'Univar Solutions' },
+  { test: /uropa|nisbets/i, name: 'Uropa Distribution' },
+  { test: /solenis|diversey/i, name: 'Solenis (Diversey)' },
+  { test: /ontex/i, name: 'Ontex Healthcare' },
+  { test: /scot\s*young|syrclean/i, name: 'Scot Young Research' }
+];
+
+function guessSupplier(lines) {
+  const joined = lines.join('\n');
+  for (let i = 0; i < KNOWN_SUPPLIERS.length; i++) {
+    if (KNOWN_SUPPLIERS[i].test.test(joined)) return { name: KNOWN_SUPPLIERS[i].name, known: true };
+  }
+  const head = lines.slice(0, 25).filter(function (l) { return !/gelling/i.test(l); });
+  const corp = head.find(function (l) { return /\b(ltd|limited|plc|llp|gmbh|bv|b\.v\.|inc|llc)\b/i.test(l) && l.length < 60; });
+  if (corp) return { name: corp.replace(/\s*[|,].*$/, '').trim(), known: false };
+  return { name: head[0] ? head[0].slice(0, 40) : '', known: false };
+}
+
+function firstWithDigit(list) {
+  for (let i = 0; i < list.length; i++) if (/\d/.test(list[i])) return list[i];
+  return '';
+}
+
+function parseInvoice(lines) {
+  const text = lines.join('\n');
+  const flags = [];
+  const r = { supplier: '', invoiceNo: '', date: '', due: '', net: null, vat: null, total: null, po: '', account: '', kind: 'invoice', reprint: false, checks: [] };
+
+  if (text.replace(/\s/g, '').length < 40) {
+    flags.push({ cls: 'bad', text: 'No text found. This looks scanned, so it needs OCR (not in this version).' });
+    r.flags = flags;
+    return r;
+  }
+
+  const sup = guessSupplier(lines);
+  r.supplier = sup.name;
+  if (!sup.known) flags.push({ cls: 'warn', text: 'New supplier: check the name' });
+
+  /* invoice number */
+  r.invoiceNo = firstWithDigit(allMatches(lines, /\binvoice\s*(?:number|no\.?|num\.?|#|ref(?:erence)?)\s*[:.#]?\s*([A-Z0-9][A-Z0-9\-\/]{2,})/i))
+    || firstWithDigit(allMatches(lines, /\binv(?:oice)?\s*[:#]\s*([A-Z0-9][A-Z0-9\-\/]{2,})/i))
+    || firstWithDigit(allMatches(lines, /\bdocument\s*(?:no|number)\.?\s*[:.]?\s*([A-Z0-9][A-Z0-9\-\/]{2,})/i))
+    || firstWithDigit(allMatches(lines, /\bnumber\s*\/\s*date\s*[:.]?\s*([A-Z0-9][A-Z0-9\-]{3,})\s*\//i))
+    || firstWithDigit(allMatches(lines, /^number\s*[:.]?\s*(\d{6,})$/i));
+  if (!r.invoiceNo) {
+    /* table layout: the label is a column heading and the number sits on the next line */
+    for (let i = 0; i < lines.length - 1 && !r.invoiceNo; i++) {
+      if (!/\binvoice\s*(?:number|no\.?)(?![A-Za-z])/i.test(lines[i])) continue;
+      for (let k = i + 1; k <= i + 2 && k < lines.length && !r.invoiceNo; k++) {
+        const m = lines[k].match(/\b(\d{6,}|[A-Z]{2,5}\d{5,})\b/);
+        if (m) r.invoiceNo = m[1];
+      }
+    }
+  }
+
+  /* dates */
+  const dt = findDates(lines);
+  r.date = dt.date; r.due = dt.due;
+  if (dt.dueNote) flags.push({ cls: 'info', text: 'Due date worked out from the payment terms (' + dt.dueNote + ')' });
+
+  /* PO and account */
+  r.po = firstWithDigit(allMatches(lines, /\b(?:your\s*)?(?:p\.?o\.?(?![A-Za-z0-9])|purchase\s*order)\s*(?:no\.?|number|#|ref)?\s*[:.]?\s*([A-Z0-9][A-Z0-9\-\/]{2,})/i))
+    || firstWithDigit(allMatches(lines, /\b(PO[\-]?\d{3,})\b/))
+    || firstWithDigit(allMatches(lines, /\byour\s*(?:order|ref(?:erence)?)\s*(?:no\.?|number)?\s*[:.]?\s*([A-Z0-9][A-Z0-9\-\/]{2,})/i))
+    || firstWithDigit(allMatches(lines, /\breference\b\s*[:.]?\s*([A-Z0-9][A-Z0-9\-\/]{2,})/i));
+  const acc = allMatches(lines, /\b(?:your\s*)?account\s*(?:no\.?|number)?\s*[:.]?\s*(\d{4,})/i);
+  r.account = acc[0] || '';
+
+  /* amounts: collect candidates, then pick the combination that adds up */
+  const prevWord = function (line, m) { return line.slice(0, m.index).match(/(net|sub|vat|goods)\s*-?\s*$/i); };
+  const totals = []
+    .concat(allMatches(lines, new RegExp('\\b(?:total\\s+amount|invoice\\s+total|total\\s+(?:due|payable|invoice)|amount\\s+(?:due|payable)|balance\\s+due|total\\s+inc(?:l\\.?|luding)?\\s*vat|gross\\s+(?:total|amount))\\b' + CUR_SRC + NUM_SRC, 'i')))
+    .concat(allMatches(lines, new RegExp('\\btotal\\s*\\(\\s*(?:GBP|£)\\s*\\)' + CUR_SRC + NUM_SRC, 'i')))
+    .concat(allMatches(lines, new RegExp('\\btotal\\b' + CUR_SRC + NUM_SRC, 'i'), prevWord))
+    .map(num);
+  const nets = []
+    .concat(allMatches(lines, new RegExp('\\b(?:net\\s*total|total\\s*net|sub\\s*-?\\s*total|net\\s*(?:amount|goods)|total\\s*(?:goods|(?:excl?\\.?|ex\\.?)\\s*(?:vat|tax))|goods\\s*(?:total|value)?)\\b' + CUR_SRC + NUM_SRC, 'i')))
+    .map(num);
+  const vats = []
+    .concat(allMatches(lines, new RegExp('\\b(?:total\\s*vat|vat\\s*(?:total|amount))\\b' + CUR_SRC + NUM_SRC, 'i')))
+    .concat(allMatches(lines, new RegExp('\\b(?:vat|tax)\\b' + CUR_SRC + NUM_SRC, 'i')))
+    .map(num);
+
+  /* "TOTAL: <vat> <gross>" summary lines, where the net is gross minus VAT */
+  lines.forEach(function (line) {
+    const m = line.match(/^total\s*:?\s*(-?[\d,]+\.\d{2})\s+(-?[\d,]+\.\d{2})\s*(?:GBP)?$/i);
+    if (m) { totals.push(num(m[2])); vats.push(num(m[1])); nets.push(num(num(m[2]) - num(m[1]))); }
+  });
+
+  const rev = function (a) { return a.slice().reverse(); };
+  let best = null;
+  const tryTotals = rev(totals), tryNets = rev(nets), tryVats = rev(vats).concat([0]);
+  for (let a = 0; a < tryTotals.length && !best; a++)
+    for (let b = 0; b < tryNets.length && !best; b++)
+      for (let c = 0; c < tryVats.length && !best; c++)
+        if (Math.abs(tryNets[b] + tryVats[c] - tryTotals[a]) < 0.011) best = { total: tryTotals[a], net: tryNets[b], vat: tryVats[c] };
+
+  if (best) {
+    r.total = best.total; r.net = best.net; r.vat = best.vat;
+  } else {
+    r.total = totals.length ? totals[totals.length - 1] : null;
+    r.net = nets.length ? nets[nets.length - 1] : null;
+    r.vat = vats.length ? vats[vats.length - 1] : null;
+    if (r.total !== null && r.net !== null && r.vat === null) { r.vat = num(r.total - r.net); flags.push({ cls: 'warn', text: 'VAT worked out from net and total' }); }
+    else if (r.total !== null && r.vat !== null && r.net === null) { r.net = num(r.total - r.vat); flags.push({ cls: 'warn', text: 'Net worked out from total and VAT' }); }
+  }
+
+  /* document flags */
+  if (/\bcredit\s+note\b/i.test(text)) { r.kind = 'credit'; flags.push({ cls: 'info', text: 'Credit note' }); }
+  if (/\breprint\b/i.test(text)) { r.reprint = true; flags.push({ cls: 'warn', text: 'Reprint: check it is not already in Sage' }); }
+
+  r.flags = flags;
+  return r;
+}
+
+
+
+var SAMPLES = [];
+
+var $ = function (s, r) { return (r || document).querySelector(s); };
+var store = {
+  get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+};
+var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+var fmt = function (n) { return (n === null || n === undefined || isNaN(n)) ? '' : Number(n).toFixed(2); };
+var toNum = function (s) { var t = String(s == null ? '' : s).replace(/[£,\s]/g, ''); return /^-?\d+(\.\d+)?$/.test(t) ? Math.round(parseFloat(t) * 100) / 100 : null; };
+var gbp = function (n) { return (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+var today = function () { var d = new Date(); return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + d.getFullYear(); };
+var json = function (k, fallback) { try { return JSON.parse(store.get(k) || ''); } catch (e) { return fallback; } };
+
+var invoices = [], selectedId = null, seq = 0, poMap = new Map(), previewToken = 0;
+var doneReg = json('ir-done', {}), aliasReg = json('ir-alias', {});
+var listEl = $('#list'), statusEl = $('#status'), liveEl = $('#live');
+
+/* ---------- reading a PDF ---------- */
+async function readLines(bytes) {
+  var doc = await pdfjsLib.getDocument({ data: bytes.slice(), disableFontFace: true }).promise;
+  var lines = [];
+  for (var p = 1; p <= doc.numPages; p++) {
+    var page = await doc.getPage(p);
+    var tc = await page.getTextContent();
+    lines = lines.concat(itemsToLines(tc.items));
+  }
+  return lines;
+}
+
+async function addInvoice(name, bytes, example) {
+  var inv = { id: 'i' + (++seq), name: name, bytes: bytes, example: !!example, done: false, doneAt: '', notes: [], f: { supplier: '', invoiceNo: '', date: '', due: '', po: '', net: '', vat: '', total: '' } };
+  try {
+    var parsed = parseInvoice(await readLines(bytes));
+    inv.notes = parsed.flags || [];
+    inv.f.supplier = aliasReg[parsed.supplier] || parsed.supplier;
+    inv.rawSupplier = parsed.supplier;
+    inv.f.invoiceNo = parsed.invoiceNo; inv.f.date = parsed.date; inv.f.due = parsed.due || ''; inv.f.po = parsed.po;
+    inv.f.net = fmt(parsed.net); inv.f.vat = fmt(parsed.vat); inv.f.total = fmt(parsed.total);
+  } catch (e) {
+    inv.notes = [{ cls: 'bad', text: 'Could not read this PDF (' + (e && e.message ? e.message : 'unknown error') + ')' }];
+  }
+  var reg = doneReg[keyOf(inv)];
+  if (!inv.example && reg) { /* flagged dynamically */ }
+  invoices.push(inv);
+  return inv;
+}
+
+function looksLikePdf(bytes) {
+  var head = '';
+  for (var i = 0; i < Math.min(bytes.length, 1024); i++) head += String.fromCharCode(bytes[i]);
+  return head.indexOf('%PDF-') >= 0;
+}
+
+async function addFiles(files, fromDrop) {
+  var list = Array.prototype.slice.call(files || []);
+  if (!list.length) {
+    statusEl.textContent = fromDrop
+      ? 'Nothing came through. Email programs and webmail often do not hand a dragged attachment to the browser. Save the PDF to your Downloads or desktop first, then drop it here or use Choose PDFs.'
+      : '';
+    return;
+  }
+  statusEl.textContent = 'Reading ' + list.length + ' file' + (list.length > 1 ? 's' : '') + '…';
+  var firstNew = null, problems = [];
+  for (var i = 0; i < list.length; i++) {
+    var f = list[i], bytes;
+    try { bytes = new Uint8Array(await f.arrayBuffer()); } catch (e) { problems.push((f.name || 'A file') + ' could not be opened'); continue; }
+    if (!bytes.length) { problems.push((f.name || 'A file') + ' arrived empty. Save it to your computer first, then drop it'); continue; }
+    if (!looksLikePdf(bytes)) {
+      problems.push((f.name || 'A file') + (/\.(msg|eml)$/i.test(f.name || '') ? ' is the email itself. Drag the PDF attachment, not the email' : ' is not a PDF (photos and scans need OCR, which is not in this version)'));
+      continue;
+    }
+    var inv = await addInvoice(f.name || ('invoice-' + (seq + 1) + '.pdf'), bytes, false);
+    if (!firstNew) firstNew = inv;
+  }
+  statusEl.textContent = problems.join('. ') + (problems.length ? '.' : '');
+  renderList();
+  if (firstNew) selectInvoice(firstNew.id);
+}
+
+function filesFromDrop(dt) {
+  var out = Array.prototype.slice.call(dt.files || []);
+  if (!out.length && dt.items) {
+    for (var i = 0; i < dt.items.length; i++) {
+      if (dt.items[i].kind === 'file') { var f = dt.items[i].getAsFile(); if (f) out.push(f); }
+    }
+  }
+  return out;
+}
+
+/* ---------- derived flags ---------- */
+function keyOf(inv) { return (inv.f.supplier || '').toLowerCase().trim() + '|' + (inv.f.invoiceNo || '').trim(); }
+function poKey(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^PO/, '').replace(/^0+/, ''); }
+
+function parsePOs(text) {
+  var m = new Map();
+  text.split(/\r?\n/).forEach(function (line) {
+    if (!line.trim()) return;
+    var cells = line.split(/[\t,;]+/).map(function (c) { return c.trim(); }).filter(Boolean);
+    if (!cells.length) return;
+    if (!/\d/.test(cells[0])) return;
+    var tot = null;
+    for (var i = cells.length - 1; i >= 1; i--) { var n = toNum(cells[i]); if (n !== null && /\./.test(cells[i])) { tot = n; break; } }
+    if (tot === null) for (var j = cells.length - 1; j >= 1; j--) { var n2 = toNum(cells[j]); if (n2 !== null) { tot = n2; break; } }
+    m.set(poKey(cells[0]), { po: cells[0], supplier: cells[1] || '', total: tot });
+  });
+  return m;
+}
+
+function dynFlags(inv) {
+  var f = inv.f, out = [];
+  var net = toNum(f.net), vat = toNum(f.vat), tot = toNum(f.total);
+  if (!f.invoiceNo.trim()) out.push({ cls: 'bad', text: 'Invoice number is empty' });
+  if (!f.date.trim()) out.push({ cls: 'bad', text: 'Invoice date is empty' });
+  else if (!normDate(f.date)) out.push({ cls: 'bad', text: 'Invoice date not recognised. Use dd/mm/yyyy' });
+  if (!f.due.trim()) out.push({ cls: 'warn', text: 'No due date found. Add it from the payment terms' });
+  else if (!normDate(f.due)) out.push({ cls: 'bad', text: 'Due date not recognised. Use dd/mm/yyyy' });
+  else if (normDate(f.date) && toDateObj(normDate(f.due)) < toDateObj(normDate(f.date))) out.push({ cls: 'warn', text: 'Due date is before the invoice date' });
+  if (tot === null) out.push({ cls: 'bad', text: 'Total is empty or not a number' });
+  else if (Math.abs(tot) < 0.005) out.push({ cls: 'warn', text: 'Zero value: charges and discounts cancel out' });
+  if (net !== null && vat !== null && tot !== null) {
+    if (Math.abs(net + vat - tot) < 0.011) out.push({ cls: 'good', text: 'Net + VAT = total' });
+    else out.push({ cls: 'bad', text: 'Net + VAT is ' + gbp(net + vat) + ' but the total is ' + gbp(tot) });
+  }
+  var k = keyOf(inv);
+  if (f.invoiceNo.trim()) {
+    var dupes = invoices.filter(function (o) { return o !== inv && keyOf(o) === k; });
+    if (dupes.length) out.push({ cls: 'bad', text: 'Duplicate: this invoice is in the list twice' });
+    if (!inv.example && !inv.done && doneReg[k]) out.push({ cls: 'warn', text: 'Already marked as entered on ' + doneReg[k] });
+  }
+  /* PO check */
+  var po = f.po.trim();
+  if (poMap.size) {
+    if (!po) out.push({ cls: 'warn', text: 'No PO number on this invoice' });
+    else {
+      var e = poMap.get(poKey(po));
+      if (!e) out.push({ cls: 'warn', text: 'PO ' + po + ' is not in your list' });
+      else if (e.total === null) out.push({ cls: 'info', text: 'PO ' + po + ' found (no total to compare)' });
+      else if (tot !== null && Math.abs(e.total - tot) < 0.015) out.push({ cls: 'good', text: 'PO ' + po + ' matches the invoice total' });
+      else if (net !== null && Math.abs(e.total - net) < 0.015) out.push({ cls: 'good', text: 'PO ' + po + ' matches the invoice net (ex VAT)' });
+      else out.push({ cls: 'bad', text: 'PO ' + po + ' is ' + gbp(e.total) + ', invoice is ' + (net !== null ? gbp(net) + ' net / ' : '') + (tot !== null ? gbp(tot) + ' gross' : 'unknown') });
+    }
+  } else if (po) {
+    out.push({ cls: 'info', text: 'PO ' + po + '. Add your PO list above to check it' });
+  }
+  return inv.notes.concat(out);
+}
+
+var RANK = { bad: 0, warn: 1, info: 2, good: 3 };
+function refreshAll() {
+  var attention = 0, entered = 0;
+  invoices.forEach(function (inv) {
+    var card = listEl.querySelector('[data-id="' + inv.id + '"]');
+    var flags = dynFlags(inv);
+    if (inv.done) entered++;
+    else if (flags.some(function (x) { return x.cls === 'bad' || x.cls === 'warn'; })) attention++;
+    if (!card) return;
+    flags.sort(function (a, b) { return RANK[a.cls] - RANK[b.cls]; });
+    $('.chips', card).innerHTML = flags.map(function (x) { return '<span class="chip ' + x.cls + '">' + esc(x.text) + '</span>'; }).join('');
+    $('.fname', card).textContent = suggestName(inv) + '.pdf';
+    card.classList.toggle('is-done', inv.done);
+  });
+  $('#summary').textContent = invoices.length
+    ? invoices.length + ' invoice' + (invoices.length > 1 ? 's' : '') + ' · ' + attention + ' to check · ' + entered + ' entered'
+    : '';
+  $('#banner').hidden = !invoices.some(function (i) { return i.example; });
+}
+
+function suggestName(inv) {
+  var s = (inv.f.supplier || 'Supplier').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  var n = (inv.f.invoiceNo || 'invoice').replace(/[^A-Za-z0-9]+/g, '-');
+  return s + '-' + n;
+}
+
+/* ---------- rendering the cards ---------- */
+function field(inv, key, label, opts) {
+  opts = opts || {};
+  var id = 'f-' + inv.id + '-' + key;
+  return '<div class="fld' + (opts.money ? ' money' : '') + (opts.total ? ' total' : '') + '">' +
+    '<label for="' + id + '">' + label + '</label><div class="fld-in">' +
+    '<input id="' + id + '" data-f="' + key + '" value="' + esc(inv.f[key]) + '" autocomplete="off" spellcheck="false"' + (opts.money ? ' inputmode="decimal"' : '') + '>' +
+    (opts.copy ? '<button type="button" class="cp" data-copy="' + key + '" aria-label="Copy ' + label.toLowerCase() + '">Copy</button>' : '') +
+    '</div></div>';
+}
+
+function renderList() {
+  if (!invoices.length) {
+    listEl.innerHTML = '<div class="empty"><strong>No invoices yet</strong>Drop one or more supplier invoice PDFs on the page. Each gets a card with the invoice number, date, net, VAT and total, and a copy button next to each figure.</div>';
+    refreshAll();
+    return;
+  }
+  listEl.innerHTML = invoices.map(function (inv) {
+    return '<article class="inv" data-id="' + inv.id + '" aria-current="' + (inv.id === selectedId) + '">' +
+      '<div class="inv-top"><input class="sup" id="sup-' + inv.id + '" data-f="supplier" value="' + esc(inv.f.supplier) + '" aria-label="Supplier" spellcheck="false">' +
+      '<label class="done"><input type="checkbox" data-done' + (inv.done ? ' checked' : '') + '> Entered in Sage</label></div>' +
+      '<div class="fields details">' +
+        field(inv, 'invoiceNo', 'Invoice no.', { copy: 1 }) +
+        field(inv, 'date', 'Invoice date', { copy: 1 }) +
+        field(inv, 'due', 'Due date', { copy: 1 }) +
+        field(inv, 'po', 'PO no.', {}) +
+      '</div>' +
+      '<div class="fields nums">' +
+        field(inv, 'net', 'Net', { copy: 1, money: 1 }) +
+        field(inv, 'vat', 'VAT', { copy: 1, money: 1 }) +
+        field(inv, 'total', 'Total', { copy: 1, money: 1, total: 1 }) +
+      '</div>' +
+      '<div class="chips" aria-label="Checks"></div>' +
+      '<div class="inv-foot"><span class="fname"></span>' +
+        '<button type="button" class="link" data-copyname>Copy file name</button>' +
+        '<button type="button" class="link danger" data-remove>Remove</button></div>' +
+    '</article>';
+  }).join('');
+  refreshAll();
+}
+
+function selectInvoice(id) {
+  if (selectedId === id) return;
+  selectedId = id;
+  Array.prototype.forEach.call(listEl.querySelectorAll('.inv'), function (c) { c.setAttribute('aria-current', String(c.getAttribute('data-id') === id)); });
+  var inv = invoices.filter(function (i) { return i.id === id; })[0];
+  if (inv) renderPreview(inv);
+}
+
+async function renderPreview(inv) {
+  var token = ++previewToken, pages = $('#pages');
+  $('#pv-name').textContent = inv.name;
+  pages.innerHTML = '<div class="note">Loading…</div>';
+  try {
+    var doc = await pdfjsLib.getDocument({ data: inv.bytes.slice(), disableFontFace: true }).promise;
+    if (token !== previewToken) return;
+    pages.innerHTML = '';
+    var width = Math.max(pages.clientWidth - 24, 280), dpr = Math.min(window.devicePixelRatio || 1, 2);
+    for (var p = 1; p <= doc.numPages; p++) {
+      var page = await doc.getPage(p);
+      if (token !== previewToken) return;
+      var base = page.getViewport({ scale: 1 });
+      var vp = page.getViewport({ scale: (width / base.width) * dpr });
+      var canvas = document.createElement('canvas');
+      canvas.width = Math.floor(vp.width); canvas.height = Math.floor(vp.height);
+      canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', 'Page ' + p + ' of ' + inv.name);
+      pages.appendChild(canvas);
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+    }
+  } catch (e) {
+    if (token === previewToken) pages.innerHTML = '<div class="note">Could not show this PDF.</div>';
+  }
+}
+
+/* ---------- copying ---------- */
+function flash(btn, text) {
+  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+  btn.textContent = text; btn.classList.toggle('ok', text === 'Copied');
+  clearTimeout(btn._t);
+  btn._t = setTimeout(function () { btn.textContent = btn.dataset.label; btn.classList.remove('ok'); }, 1300);
+}
+async function copyText(text, btn, input) {
+  var ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; }
+  catch (e) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;opacity:0;top:0';
+      document.body.appendChild(ta); ta.select(); ok = document.execCommand('copy'); ta.remove();
+    } catch (e2) {}
+  }
+  if (ok) { flash(btn, 'Copied'); liveEl.textContent = 'Copied ' + text; }
+  else { flash(btn, 'Press Ctrl+C'); if (input) { input.focus(); input.select(); } }
+}
+
+/* ---------- events ---------- */
+function cardOf(el) { var c = el.closest('.inv'); return c ? invoices.filter(function (i) { return i.id === c.getAttribute('data-id'); })[0] : null; }
+
+listEl.addEventListener('input', function (e) {
+  var key = e.target.getAttribute('data-f'), inv = cardOf(e.target);
+  if (!key || !inv) return;
+  inv.f[key] = e.target.value;
+  if (key === 'supplier' && inv.rawSupplier) { aliasReg[inv.rawSupplier] = e.target.value.trim(); store.set('ir-alias', JSON.stringify(aliasReg)); }
+  refreshAll();
+});
+listEl.addEventListener('change', function (e) {
+  var inv = cardOf(e.target);
+  if (!inv) return;
+  if (e.target.hasAttribute('data-done')) {
+    inv.done = e.target.checked; inv.doneAt = inv.done ? today() : '';
+    if (!inv.example && inv.f.invoiceNo.trim()) {
+      var k = keyOf(inv);
+      if (inv.done) doneReg[k] = inv.doneAt; else delete doneReg[k];
+      store.set('ir-done', JSON.stringify(doneReg));
+    }
+    refreshAll();
+    return;
+  }
+  var key = e.target.getAttribute('data-f');
+  if (key === 'date' || key === 'due') { var nd = normDate(e.target.value); if (nd) { e.target.value = nd; inv.f[key] = nd; refreshAll(); } }
+  if (key === 'net' || key === 'vat' || key === 'total') { var n = toNum(e.target.value); if (n !== null) { e.target.value = fmt(n); inv.f[key] = fmt(n); refreshAll(); } }
+});
+listEl.addEventListener('click', function (e) {
+  var inv = cardOf(e.target);
+  if (!inv) return;
+  var cp = e.target.closest('[data-copy]');
+  if (cp) {
+    var key = cp.getAttribute('data-copy'), input = $('[data-f="' + key + '"]', cp.closest('.fld'));
+    var v = input.value.trim();
+    if (key === 'net' || key === 'vat' || key === 'total') { var n = toNum(v); if (n !== null) v = fmt(n); }
+    copyText(v, cp, input);
+  } else if (e.target.closest('[data-copyname]')) {
+    copyText(suggestName(inv) + '.pdf', e.target.closest('[data-copyname]'), null);
+  } else if (e.target.closest('[data-remove]')) {
+    invoices = invoices.filter(function (i) { return i !== inv; });
+    if (selectedId === inv.id) { selectedId = null; previewToken++; $('#pv-name').textContent = 'Select an invoice'; $('#pages').innerHTML = '<div class="note">Click an invoice card to see the PDF here.</div>'; }
+    renderList();
+    if (!selectedId && invoices.length) selectInvoice(invoices[0].id);
+    return;
+  }
+  selectInvoice(inv.id);
+});
+listEl.addEventListener('focusin', function (e) { var inv = cardOf(e.target); if (inv) selectInvoice(inv.id); });
+
+$('#choose').addEventListener('click', function () { $('#file').click(); });
+$('#file').addEventListener('change', function (e) { addFiles(e.target.files, false); e.target.value = ''; });
+/* Ctrl+V also works when a PDF file has been copied (for example from File Explorer) */
+document.addEventListener('paste', function (e) {
+  if (inField(e)) return;
+  var files = filesFromDrop(e.clipboardData || {});
+  if (files.length) { e.preventDefault(); addFiles(files, false); }
+});
+$('#clear-examples').addEventListener('click', function () {
+  invoices = invoices.filter(function (i) { return !i.example; });
+  selectedId = null; previewToken++;
+  $('#pv-name').textContent = 'Select an invoice'; $('#pages').innerHTML = '<div class="note">Click an invoice card to see the PDF here.</div>';
+  renderList();
+  if (invoices.length) selectInvoice(invoices[0].id);
+});
+
+var dropEl = $('#drop');
+/* Take over every drag onto the page (except into text boxes), so a drop from an email program or webmail
+   never makes the browser navigate away to a blank page. */
+function inField(e) { return e.target && e.target.closest && e.target.closest('input,textarea'); }
+document.addEventListener('dragenter', function (e) { if (inField(e)) return; e.preventDefault(); dropEl.classList.add('dragging'); });
+document.addEventListener('dragover', function (e) { if (inField(e)) return; e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; });
+document.addEventListener('dragleave', function (e) { if (!e.relatedTarget) dropEl.classList.remove('dragging'); });
+document.addEventListener('drop', function (e) {
+  if (inField(e)) return;
+  e.preventDefault(); dropEl.classList.remove('dragging');
+  addFiles(filesFromDrop(e.dataTransfer), true);
+});
+
+var poBox = $('#po-list');
+function applyPOs() {
+  poMap = parsePOs(poBox.value);
+  $('#po-count').textContent = poMap.size ? poMap.size + ' PO' + (poMap.size > 1 ? 's' : '') + ' loaded' : 'none added yet';
+  refreshAll();
+}
+poBox.addEventListener('input', function () { store.set('ir-pos', poBox.value); applyPOs(); });
+
+/* ---------- start ---------- */
+async function init() {
+  var savedPOs = store.get('ir-pos');
+  if (savedPOs) { poBox.value = savedPOs; $('#po-details').open = true; }
+  poMap = parsePOs(poBox.value);
+  $('#po-count').textContent = poMap.size ? poMap.size + ' PO' + (poMap.size > 1 ? 's' : '') + ' loaded' : 'none added yet';
+  if (typeof pdfjsLib === 'undefined') {
+    statusEl.textContent = 'The PDF reader did not load. Check your connection and reload the page.';
+    renderList();
+    return;
+  }
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  renderList();
+  statusEl.textContent = 'Reading the sample invoices…';
+  for (var i = 0; i < SAMPLES.length; i++) {
+    var bin = atob(SAMPLES[i].b64), bytes = new Uint8Array(bin.length);
+    for (var j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j);
+    await addInvoice(SAMPLES[i].name, bytes, true);
+  }
+  statusEl.textContent = '';
+  renderList();
+  if (invoices.length) selectInvoice(invoices[0].id);
+}
+init();
+})();
+</script>
+
+</html>
