@@ -234,22 +234,30 @@ function datesInLine(line) {
 }
 
 /* Column-heading layout: the label is a heading and the date sits on the next line. */
-function headingDates(lines, labelRe) {
+function headingDates(lines, labelRe, exclude) {
   for (let i = 0; i < lines.length - 1; i++) {
     if (!labelRe.test(lines[i])) continue;
     const at = lines[i].search(labelRe);
     if (datesInLine(lines[i].slice(at)).length) continue;
-    for (let k = i + 1; k <= i + 2 && k < lines.length; k++) {
+    let pick = null;
+    /* a line that is only a date is the safest match (the value drifted onto its own row) */
+    for (let k = i + 1; k <= i + 3 && k < lines.length && !pick; k++) {
       const ds = datesInLine(lines[k]);
-      if (ds.length) return { head: lines[i], dates: ds };
+      if (ds.length && !/[A-Za-z]{3,}/.test(lines[k].replace(new RegExp(DATE_SRC, 'gi'), ''))) pick = ds;
     }
+    /* otherwise the next line, but never one that is about order, delivery or despatch dates */
+    for (let k = i + 1; k <= i + 2 && k < lines.length && !pick; k++) {
+      const ds = datesInLine(lines[k]);
+      if (ds.length && !(exclude || /order|deliver|d[ei]spatch|loading|print|ship/i).test(lines[k])) pick = ds;
+    }
+    if (pick) return { head: lines[i], dates: pick };
   }
   return null;
 }
 
 function findDates(lines) {
   const res = { date: '', due: '', dueNote: '' };
-  const dueSkip = function (line, m) { return /due\s*$/i.test(line.slice(0, m.index)); };
+  const dueSkip = function (line, m) { return /(?:due|order|deliver\w*|d[ei]spatch\w*|ship\w*|print\w*|loading)\s*\/?\s*$/i.test(line.slice(0, m.index)); };
   const first = function (list, skip) {
     for (let i = 0; i < list.length; i++) {
       const hits = allMatches(lines, list[i], skip);
@@ -287,7 +295,7 @@ function findDates(lines) {
     new RegExp('\\b(?:pay(?:ment)?\\s*by|payable\\s*by)\\s*[:.]?\\s*' + DATE_SRC, 'i')
   ]);
   if (!res.due) {
-    const hd = headingDates(lines, /\bdue\s*date\b/i);
+    const hd = headingDates(lines, /\bdue\s*date\b/i, /order|deliver|d[ei]spatch|loading|print/i);
     if (hd) {
       if (/\binvoice\s*date\b/i.test(hd.head)) {
         if (hd.dates.length >= 2) res.due = hd.head.search(/invoice\s*date/i) < hd.head.search(/due\s*date/i) ? hd.dates[hd.dates.length - 1] : hd.dates[0];
