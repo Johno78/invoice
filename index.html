@@ -347,10 +347,10 @@ function guessSupplier(lines) {
   for (let i = 0; i < KNOWN_SUPPLIERS.length; i++) {
     if (KNOWN_SUPPLIERS[i].test.test(joined)) return { name: KNOWN_SUPPLIERS[i].name, known: true };
   }
-  const skipLine = /gelling|^(?:tax\s*|sales\s*|vat\s*|pro-?\s*forma\s*)?(?:invoice|credit\s*note|statement|original|copy|duplicate)\b|invoice\s*(?:no|number)|^page\b|^\d/i;
+  const skipLine = /gelling|^attn\b|^(?:tax\s*|sales\s*|vat\s*|pro-?\s*forma\s*)?(?:invoice|credit\s*note|statement|original|copy|duplicate)\b|invoice\s*(?:no|number)|^page\b|^\d/i;
   const head = lines.slice(0, 25).filter(function (l) { return !skipLine.test(l); });
   const corp = head.find(function (l) { return /\b(ltd|limited|plc|llp|gmbh|bv|b\.v\.|inc|llc)\b/i.test(l) && l.length < 60; });
-  if (corp) return { name: corp.replace(/\s*[|,].*$/, '').trim(), known: false };
+  if (corp) return { name: corp.replace(/^(?:(?:bill|ship|invoice|deliver|sold|from)\s*to\s*)+/i, '').replace(/\s*[|,].*$/, '').trim(), known: false };
   const wordy = head.find(function (l) { return (l.match(/[A-Za-z]/g) || []).length >= 4 && (l.match(/\d/g) || []).length < l.length * 0.3 && l.length < 50; });
   return { name: wordy || (head[0] ? head[0].slice(0, 40) : ''), known: false };
 }
@@ -400,6 +400,34 @@ function columnPO(lines, invoiceNo) {
   return '';
 }
 
+/* A heading row such as "Amount due | Due date | Issue date | Invoice number" with the values on the next row, matched by position. */
+function headingRow(lines) {
+  const defs = [
+    ['total', /\bamount\s*due\b|\btotal\s*due\b/i],
+    ['due', /\bdue\s*date\b|\bpayment\s*due\b/i],
+    ['date', /\b(?:issue|invoice)\s*date\b|\bdate\s*of\s*issue\b|\bdate\/tax\s*point\b/i],
+    ['inv', /\binvoice\s*(?:number|no\.?)(?![A-Za-z])/i]
+  ];
+  for (let i = 0; i < lines.length - 1; i++) {
+    const cols = defs.map(function (d) { const m = lines[i].match(d[1]); return m ? { k: d[0], p: m.index } : null; })
+      .filter(Boolean).sort(function (a, b) { return a.p - b.p; });
+    if (cols.length < 3 || !cols.some(function (c) { return c.k === 'date'; })) continue;
+    const row = lines[i + 1], items = [];
+    const re = new RegExp('(' + DATE_SRC.replace(/\((?!\?)/g, '(?:') + ')|(£?\\d[\\d,]*\\.\\d\\d)|([A-Za-z0-9][A-Za-z0-9\\-\\/]{3,})', 'gi');
+    let m;
+    while ((m = re.exec(row))) items.push(m[1] ? { t: 'd', v: m[1] } : m[2] ? { t: 'm', v: m[2] } : { t: 'o', v: m[3] });
+    if (items.length !== cols.length) continue;
+    const out = {};
+    for (let j = 0; j < cols.length; j++) {
+      const k = cols[j].k, it = items[j];
+      if ((k === 'due' || k === 'date') && it.t === 'd') out[k] = normDate(it.v);
+      else if (k === 'inv' && it.t !== 'm') out.inv = it.v;
+    }
+    if (out.date) return out;
+  }
+  return null;
+}
+
 function parseInvoice(rawLines) {
   const lines = joinSplitDates(rawLines);
   const text = lines.join('\n');
@@ -436,6 +464,11 @@ function parseInvoice(rawLines) {
   /* dates */
   const dt = findDates(lines);
   r.date = dt.date; r.due = dt.due;
+  const hr = headingRow(lines);
+  if (hr) {
+    r.date = hr.date || r.date; if (hr.due) { r.due = hr.due; dt.dueNote = ''; }
+    if (!r.invoiceNo && hr.inv) r.invoiceNo = hr.inv;
+  }
   if (dt.dueNote) flags.push({ cls: 'info', text: 'Due date worked out from the payment terms (' + dt.dueNote + ')' });
 
   /* PO and account */
@@ -459,7 +492,7 @@ function parseInvoice(rawLines) {
     .map(num);
   const vats = []
     .concat(allMatches(lines, new RegExp('\\b(?:total\\s*vat|vat\\s*(?:total|amount))\\b' + CUR_SRC + NUM_SRC, 'i')))
-    .concat(allMatches(lines, new RegExp('\\b(?:vat|tax)\\b' + CUR_SRC + NUM_SRC, 'i'), function (line, m) {
+    .concat(allMatches(lines, new RegExp('\\b(?:vat|tax)\\b(?:\\s*\\d+(?:\\.\\d+)?\\s*%)?' + CUR_SRC + NUM_SRC, 'i'), function (line, m) {
       return /\b(?:incl(?:uding)?|inc|excl(?:uding)?|ex)\.?\s*$/i.test(line.slice(0, m.index));
     }))
     .map(num);
