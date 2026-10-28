@@ -210,6 +210,7 @@ function normDate(s) {
     y = +mm[1]; m = +mm[2]; d = +mm[3];
   } else if ((mm = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/))) {
     d = +mm[1]; m = +mm[2]; y = +mm[3];
+    if (m > 12 && d <= 12) { const t = d; d = m; m = t; } /* 10/27/26 can only be month/day */
   } else if ((mm = s.match(/^(\d{1,2})(?:st|nd|rd|th)?[\s\-\/]+([A-Za-z]{3,9})\.?,?[\s\-\/]+(\d{2,4})$/))) {
     d = +mm[1]; m = MONTHS[mm[2].slice(0, 3).toLowerCase()]; y = +mm[3];
   } else if ((mm = s.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$/))) {
@@ -266,6 +267,7 @@ function findDates(lines) {
     return '';
   };
 
+  const debit = first([new RegExp('\\bdebited\\s+(?:from\\s+your\\s+account\\s+)?on\\s+' + DATE_SRC, 'i')]);
   /* invoice date */
   res.date = first([
     new RegExp('\\b(?:invoice|inv\\.?|issue|document|doc\\.?)\\s*(?:date|dated)\\s*[:.]?\\s*' + DATE_SRC, 'i'),
@@ -295,6 +297,7 @@ function findDates(lines) {
     new RegExp('\\bdate\\s*due\\s*[:.]?\\s*' + DATE_SRC, 'i'),
     new RegExp('\\b(?:pay(?:ment)?\\s*by|payable\\s*by)\\s*[:.]?\\s*' + DATE_SRC, 'i')
   ]);
+  if (!res.due) res.due = debit;
   if (!res.due) {
     const hd = headingDates(lines, /\bdue\s*date\b/i, /order|deliver|d[ei]spatch|loading|print/i);
     if (hd) {
@@ -349,10 +352,16 @@ function guessSupplier(lines) {
   }
   const skipLine = /gelling|^attn\b|^(?:tax\s*|sales\s*|vat\s*|pro-?\s*forma\s*)?(?:invoice|credit\s*note|statement|original|copy|duplicate)\b|invoice\s*(?:no|number)|^page\b|^\d/i;
   const head = lines.slice(0, 25).filter(function (l) { return !skipLine.test(l); });
-  const corp = head.find(function (l) { return /\b(ltd|limited|plc|llp|gmbh|bv|b\.v\.|inc|llc)\b/i.test(l) && l.length < 60; });
-  if (corp) return { name: corp.replace(/^(?:(?:bill|ship|invoice|deliver|sold|from)\s*to\s*)+/i, '').replace(/\s*[|,].*$/, '').trim(), known: false };
-  const wordy = head.find(function (l) { return (l.match(/[A-Za-z]/g) || []).length >= 4 && (l.match(/\d/g) || []).length < l.length * 0.3 && l.length < 50; });
-  return { name: wordy || (head[0] ? head[0].slice(0, 40) : ''), known: false };
+  const trading = joined.match(/^.*?([A-Z][A-Za-z&.'() -]{2,40}?\s+(?:Ltd|Limited|plc|LLP))\s+trading\s+as\s+([A-Za-z&.' -]{3,40})/m);
+  if (trading) return { name: trading[1].trim() + ' t/a ' + trading[2].trim(), known: false };
+  const corpRe = /((?:(?:[A-Z][A-Za-z0-9&.'-]*|and|of|the|&)\s+){0,5}?[A-Z][A-Za-z0-9&.'-]*(?:\s*\([A-Za-z]+\))?\s+(?:Ltd|LTD|Limited|LIMITED|PLC|plc|LLP|GmbH|BV|B\.V\.|Inc|LLC)\b\.?)/;
+  const addr = /\b(estate|road|street|lane|avenue|isle of man|kingdom|bank|billing|delivery|address|vat|reg\.?\s*no)\b/i;
+  for (let i = 0; i < head.length; i++) {
+    const clean = head[i].replace(/^(?:(?:bill|ship|invoice|deliver|sold|from)\s*to\s*)+/i, '');
+    const m = clean.match(corpRe);
+    if (m && !addr.test(m[1])) return { name: m[1].trim(), known: false };
+  }
+  return { name: '', known: false };
 }
 
 function firstWithDigit(list) {
@@ -405,21 +414,25 @@ function headingRow(lines) {
   const defs = [
     ['total', /\bamount\s*due\b|\btotal\s*due\b/i],
     ['due', /\bdue\s*date\b|\bpayment\s*due\b/i],
-    ['date', /\b(?:issue|invoice)\s*date\b|\bdate\s*of\s*issue\b|\bdate\/tax\s*point\b/i],
+    ['acc', /\baccount\s*no\.?/i],
+    ['date', /\b(?:issue|invoice|document)\s*date\b|\bdate\s*of\s*issue\b|\bdate\/tax\s*point\b/i],
     ['inv', /\binvoice\s*(?:number|no\.?)(?![A-Za-z])/i]
   ];
   for (let i = 0; i < lines.length - 1; i++) {
     const cols = defs.map(function (d) { const m = lines[i].match(d[1]); return m ? { k: d[0], p: m.index } : null; })
       .filter(Boolean).sort(function (a, b) { return a.p - b.p; });
     if (cols.length < 3 || !cols.some(function (c) { return c.k === 'date'; })) continue;
-    const row = lines[i + 1], items = [];
+    const items = [];
+    let row = '';
+    for (let k = i + 1; k <= i + 3 && k < lines.length; k++) if (datesInLine(lines[k]).length) { row = lines[k]; break; }
+    if (!row) continue;
     const re = new RegExp('(' + DATE_SRC.replace(/\((?!\?)/g, '(?:') + ')|(£?\\d[\\d,]*\\.\\d\\d)|([A-Za-z0-9][A-Za-z0-9\\-\\/]{3,})', 'gi');
     let m;
     while ((m = re.exec(row))) items.push(m[1] ? { t: 'd', v: m[1] } : m[2] ? { t: 'm', v: m[2] } : { t: 'o', v: m[3] });
-    if (items.length !== cols.length) continue;
-    const out = {};
+    if (items.length < cols.length) continue;
+    const out = {}, tail = items.slice(items.length - cols.length);
     for (let j = 0; j < cols.length; j++) {
-      const k = cols[j].k, it = items[j];
+      const k = cols[j].k, it = tail[j];
       if ((k === 'due' || k === 'date') && it.t === 'd') out[k] = normDate(it.v);
       else if (k === 'inv' && it.t !== 'm') out.inv = it.v;
     }
@@ -442,14 +455,15 @@ function parseInvoice(rawLines) {
 
   const sup = guessSupplier(lines);
   r.supplier = sup.name;
-  if (!sup.known) flags.push({ cls: 'warn', text: 'New supplier: check the name' });
+  if (!sup.known) flags.push({ cls: 'warn', text: sup.name ? 'New supplier: check the name' : 'Supplier name not found: type it in' });
 
   /* invoice number */
   r.invoiceNo = firstWithDigit(allMatches(lines, /\binvoice\s*(?:number|no\.?|num\.?|#|ref(?:erence)?)\s*[:.#]?\s*([A-Z0-9][A-Z0-9\-\/]{2,})/i))
     || firstWithDigit(allMatches(lines, /\binv(?:oice)?\s*[:#]\s*([A-Z0-9][A-Z0-9\-\/]{2,})/i))
     || firstWithDigit(allMatches(lines, /\bdocument\s*(?:no|number)\.?\s*[:.]?\s*([A-Z0-9][A-Z0-9\-\/]{2,})/i))
     || firstWithDigit(allMatches(lines, /\bnumber\s*\/\s*date\s*[:.]?\s*([A-Z0-9][A-Z0-9\-]{3,})\s*\//i))
-    || firstWithDigit(allMatches(lines, /^number\s*[:.]?\s*(\d{6,})$/i));
+    || firstWithDigit(allMatches(lines, /^number\s*[:.]?\s*(\d{6,})$/i))
+    || firstWithDigit(allMatches(lines, /(?<!(?:account|customer|order|phone|tel|reg|vat|advice)\.?\s)\bNumber\s+(\d{3,8})\b/));
   if (!r.invoiceNo) {
     /* table layout: the label is a column heading and the number sits on the next line */
     for (let i = 0; i < lines.length - 1 && !r.invoiceNo; i++) {
@@ -467,7 +481,7 @@ function parseInvoice(rawLines) {
   const hr = headingRow(lines);
   if (hr) {
     r.date = hr.date || r.date; if (hr.due) { r.due = hr.due; dt.dueNote = ''; }
-    if (!r.invoiceNo && hr.inv) r.invoiceNo = hr.inv;
+    if (hr.inv) r.invoiceNo = hr.inv;
   }
   if (dt.dueNote) flags.push({ cls: 'info', text: 'Due date worked out from the payment terms (' + dt.dueNote + ')' });
 
@@ -477,6 +491,14 @@ function parseInvoice(rawLines) {
     || firstWithDigit(allMatches(lines, /\byour\s*(?:order|ref(?:erence)?)\s*(?:no\.?|number)?\s*[:.]?\s*([A-Z0-9][A-Z0-9\-\/]{2,})/i))
     || firstWithDigit(allMatches(lines, /\breference\b\s*[:.]?\s*([A-Z0-9][A-Z0-9\-\/]{2,})/i));
   if (!r.po) r.po = columnPO(lines, r.invoiceNo);
+  if (!r.po) {
+    /* "Customer Ref | Order Date" headings where an earlier column may be blank: the reference is the token just before the first date */
+    for (let i = 0; i < lines.length - 1 && !r.po; i++) {
+      if (!/\b(?:customer|your)\s*ref(?:erence)?\s+(?:order\s*)?date\b/i.test(lines[i])) continue;
+      const toks = lines[i + 1].split(/\s+/), at = toks.findIndex(function (t) { return !!normDate(t); });
+      if (at > 0 && /\d/.test(toks[at - 1]) && toks[at - 1] !== r.invoiceNo) r.po = toks[at - 1];
+    }
+  }
   const acc = allMatches(lines, /\b(?:your\s*)?account\s*(?:no\.?|number)?\s*[:.]?\s*(\d{4,})/i);
   r.account = acc[0] || '';
 
@@ -517,8 +539,19 @@ function parseInvoice(rawLines) {
     r.total = totals.length ? totals[totals.length - 1] : null;
     r.net = nets.length ? nets[nets.length - 1] : null;
     r.vat = vats.length ? vats[vats.length - 1] : null;
-    if (r.total !== null && r.net !== null && r.vat === null) { r.vat = num(r.total - r.net); flags.push({ cls: 'warn', text: 'VAT worked out from net and total' }); }
+    if (r.total !== null && r.net !== null && r.vat !== null) { r.net = num(r.total - r.vat); flags.push({ cls: 'warn', text: 'Net worked out from total and VAT (the net figures on the invoice did not add up)' }); }
+    else if (r.total !== null && r.net !== null && r.vat === null) { r.vat = num(r.total - r.net); flags.push({ cls: 'warn', text: 'VAT worked out from net and total' }); }
     else if (r.total !== null && r.vat !== null && r.net === null) { r.net = num(r.total - r.vat); flags.push({ cls: 'warn', text: 'Net worked out from total and VAT' }); }
+  }
+
+  /* web-shop layout: Subtotal (Ex. VAT) less discount plus shipping (Ex. VAT), then Grand Total; VAT may be missing when it is 0 on goods */
+  const wsub = text.match(/Subtotal\s*\(Ex\.?\s*VAT\)\s*:?\s*£?\s*(-?[\d,]+\.\d\d)/i), wgt = text.match(/Grand\s*Total\s*:?\s*£?\s*(-?[\d,]+\.\d\d)/i);
+  if (wsub && wgt) {
+    const wdis = text.match(/\bDiscount\s*:?\s*(-?)£?\s*(-?[\d,]+\.\d\d)/i), wship = text.match(/Shipping[^\n]*?\(Ex\.?\s*VAT\)\s*:?\s*£?\s*(-?[\d,]+\.\d\d)/i);
+    const net = num(num(wsub[1]) - (wdis ? Math.abs(num(wdis[2])) : 0) + (wship ? num(wship[1]) : 0));
+    r.total = num(wgt[1]); r.net = net; r.vat = num(r.total - net);
+    for (let i = flags.length - 1; i >= 0; i--) if (/worked out/i.test(flags[i].text)) flags.splice(i, 1);
+    flags.push({ cls: 'info', text: 'Net worked out from subtotal, discount and shipping; VAT is the difference' });
   }
 
   /* document flags */
